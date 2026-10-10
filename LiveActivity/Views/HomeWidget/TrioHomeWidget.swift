@@ -7,6 +7,7 @@
 //  Display only. The data comes from a snapshot the Trio app writes to the
 //  shared app group (see TrioHomeWidgetBridge in LiveActivityManager.swift).
 //
+import AppIntents
 import Charts
 import SwiftUI
 import WidgetKit
@@ -54,6 +55,21 @@ struct TrioHomeWidgetProvider: TimelineProvider {
     }
 }
 
+// MARK: - Refresh button
+
+/// Tapping the refresh button redraws the widget from the latest snapshot without opening Trio.
+/// Trio saves every new reading to the snapshot even when iOS skips a scheduled refresh,
+/// and refreshes started from a tap do not count against the daily limit. Display only.
+struct TrioHomeWidgetRefreshIntent: AppIntent {
+    static var title: LocalizedStringResource = "Refresh Trio widget"
+    static var isDiscoverable: Bool = false
+
+    func perform() async throws -> some IntentResult {
+        WidgetCenter.shared.reloadTimelines(ofKind: TrioHomeWidgetStore.kind)
+        return .result()
+    }
+}
+
 // MARK: - Widget
 
 struct TrioHomeWidget: Widget {
@@ -71,6 +87,7 @@ struct TrioHomeWidget: Widget {
         .supportedFamilies([
             .systemSmall,
             .systemMedium,
+            .systemLarge,
             .accessoryCircular,
             .accessoryRectangular,
             .accessoryInline
@@ -92,6 +109,8 @@ struct TrioHomeWidgetView: View {
                 switch family {
                 case .systemMedium:
                     TrioHomeWidgetMediumView(model: model)
+                case .systemLarge:
+                    TrioHomeWidgetLargeView(model: model)
                 case .accessoryCircular:
                     TrioHomeWidgetCircularView(model: model)
                 case .accessoryRectangular:
@@ -150,7 +169,7 @@ struct TrioHomeWidgetEmptyView: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        if family == .systemSmall || family == .systemMedium {
+        if family == .systemSmall || family == .systemMedium || family == .systemLarge {
             VStack(spacing: 4) {
                 Text("--")
                     .font(.system(size: 34, weight: .bold, design: .rounded))
@@ -231,7 +250,7 @@ struct TrioHomeWidgetAgeView: View {
 }
 
 /// A coloured dot and "loop 2m", like Trio's loop circle: green when the loop ran recently,
-/// amber after 6 minutes, red after 15 minutes or when there is no loop result.
+/// amber after 26 minutes, red after 30 minutes or when there is no loop result.
 struct TrioHomeWidgetLoopView: View {
     let model: TrioHomeWidgetModel
 
@@ -248,6 +267,24 @@ struct TrioHomeWidgetLoopView: View {
         )
         .lineLimit(1)
         .minimumScaleFactor(0.7)
+    }
+}
+
+/// A small round refresh button for the top right corner. Tapping it redraws the widget
+/// with the latest reading without opening Trio.
+struct TrioHomeWidgetRefreshButton: View {
+    var body: some View {
+        Button(intent: TrioHomeWidgetRefreshIntent()) {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(0.10)))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.20), lineWidth: 0.6))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Refresh"))
     }
 }
 
@@ -293,7 +330,11 @@ struct TrioHomeWidgetSmallView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            TrioHomeWidgetGlucoseView(model: model, size: 44)
+            HStack(alignment: .top, spacing: 2) {
+                TrioHomeWidgetGlucoseView(model: model, size: 44)
+                Spacer(minLength: 0)
+                TrioHomeWidgetRefreshButton()
+            }
             TrioHomeWidgetDeltaView(model: model)
             Spacer(minLength: 0)
             HStack(spacing: 6) {
@@ -307,33 +348,71 @@ struct TrioHomeWidgetSmallView: View {
     }
 }
 
-/// Left: the number, change, age and loop status. Right: the chart, with IOB and COB side by side under it,
-/// so the narrow left column is not crowded.
+/// Top row: the number, change, age and loop status, with IOB and COB on the right.
+/// Below: the chart across the whole width of the widget.
 struct TrioHomeWidgetMediumView: View {
     let model: TrioHomeWidgetModel
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                TrioHomeWidgetGlucoseView(model: model, size: 38)
-                TrioHomeWidgetDeltaView(model: model)
-                Spacer(minLength: 0)
-                TrioHomeWidgetAgeView(model: model)
-                TrioHomeWidgetLoopView(model: model)
-            }
-            .frame(width: 96, alignment: .leading)
-
-            VStack(spacing: 6) {
-                TrioHomeWidgetChartView(model: model)
-                    .padding(.leading, 6)
-                    .padding(.vertical, 6)
-                    .padding(.trailing, 2)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .modifier(TrioHomeWidgetGlass(cornerRadius: 14))
-                HStack(spacing: 6) {
+        VStack(spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                TrioHomeWidgetGlucoseView(model: model, size: 32)
+                    .fixedSize()
+                VStack(alignment: .leading, spacing: 1) {
+                    TrioHomeWidgetDeltaView(model: model)
+                    HStack(spacing: 6) {
+                        TrioHomeWidgetAgeView(model: model)
+                        TrioHomeWidgetLoopView(model: model)
+                    }
+                }
+                Spacer(minLength: 4)
+                HStack(spacing: 4) {
                     TrioHomeWidgetStatView(title: "IOB", value: model.iobText, isStale: model.isStale || model.isLoopStale)
                     TrioHomeWidgetStatView(title: "COB", value: model.cobText, isStale: model.isStale || model.isLoopStale)
                 }
+                .frame(width: 112)
+                TrioHomeWidgetRefreshButton()
+            }
+
+            TrioHomeWidgetChartView(model: model)
+                .padding(.leading, 8)
+                .padding(.vertical, 6)
+                .padding(.trailing, 4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(TrioHomeWidgetGlass(cornerRadius: 14))
+        }
+    }
+}
+
+/// Full width and tall: a big number on top, a large chart in the middle, IOB and COB along the bottom.
+struct TrioHomeWidgetLargeView: View {
+    let model: TrioHomeWidgetModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    TrioHomeWidgetGlucoseView(model: model, size: 56)
+                    TrioHomeWidgetDeltaView(model: model)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 4) {
+                    TrioHomeWidgetRefreshButton()
+                    TrioHomeWidgetAgeView(model: model)
+                    TrioHomeWidgetLoopView(model: model)
+                }
+            }
+
+            TrioHomeWidgetChartView(model: model)
+                .padding(.leading, 8)
+                .padding(.vertical, 8)
+                .padding(.trailing, 4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(TrioHomeWidgetGlass(cornerRadius: 16))
+
+            HStack(spacing: 8) {
+                TrioHomeWidgetStatView(title: "IOB", value: model.iobText, isStale: model.isStale || model.isLoopStale)
+                TrioHomeWidgetStatView(title: "COB", value: model.cobText, isStale: model.isStale || model.isLoopStale)
             }
         }
     }
@@ -489,6 +568,17 @@ struct TrioHomeWidgetRectangularView: View {
         .lineLimit(1)
         .minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Refresh button in the top right corner, like the Home Screen sizes.
+        .overlay(alignment: .topTrailing) {
+            Button(intent: TrioHomeWidgetRefreshIntent()) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 24, height: 24, alignment: .topTrailing)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Refresh"))
+        }
     }
 }
 
