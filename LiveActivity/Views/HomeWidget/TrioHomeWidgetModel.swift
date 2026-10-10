@@ -134,9 +134,31 @@ struct TrioHomeWidgetModel {
     var usesRunningAge: Bool { ageMinutes >= Self.minuteLabelLimit }
 
     /// True when the loop has not produced a result recently, so IOB and COB may be out of date.
-    var isLoopStale: Bool {
-        guard let loopDate = snapshot.loopDate else { return true }
-        return now.timeIntervalSince(loopDate) > Self.forecastMaxAge
+    var isLoopStale: Bool { loopStatus == .stale }
+
+    /// Like Trio's loop circle: fresh (green), aging (amber) or stale (red).
+    enum LoopStatus { case fresh, aging, stale }
+
+    /// A loop result older than this is shown as aging.
+    static let loopAgingAfter: TimeInterval = 6 * 60
+
+    var loopAgeMinutes: Int? {
+        guard let loopDate = snapshot.loopDate else { return nil }
+        return Int(max(0, now.timeIntervalSince(loopDate)) / 60)
+    }
+
+    var loopStatus: LoopStatus {
+        guard let loopDate = snapshot.loopDate else { return .stale }
+        let loopAge = now.timeIntervalSince(loopDate)
+        if loopAge > Self.forecastMaxAge { return .stale }
+        if loopAge > Self.loopAgingAfter { return .aging }
+        return .fresh
+    }
+
+    /// "loop 2m", "loop now" or "no loop".
+    var loopText: String {
+        guard let minutes = loopAgeMinutes else { return "no loop" }
+        return minutes < 1 ? "loop now" : "loop \(minutes)m"
     }
 
     var ageText: String {
@@ -169,6 +191,41 @@ struct TrioHomeWidgetModel {
     }
 
     var band: Band { Self.band(mgdl: Double(snapshot.glucose), low: snapshot.low, high: snapshot.high) }
+
+    /// The trend arrow in words, for VoiceOver.
+    var directionWords: String? {
+        switch direction ?? "" {
+        case "↑↑↑", "↑↑": return "rising fast"
+        case "↑": return "rising"
+        case "↗︎", "↗": return "rising slightly"
+        case "→": return "steady"
+        case "↘︎", "↘": return "falling slightly"
+        case "↓": return "falling"
+        case "↓↓", "↓↓↓": return "falling fast"
+        default: return nil
+        }
+    }
+
+    /// What VoiceOver reads for the whole widget, for example
+    /// "Glucose 112 mg/dL, steady, 1 minute ago. Insulin on board 1.25 units. Carbs on board 20 grams."
+    var accessibilityText: String {
+        var parts = ["Glucose \(glucoseText) \(snapshot.units)"]
+        if let directionWords { parts.append(directionWords) }
+        if ageMinutes < 1 {
+            parts.append("just now")
+        } else {
+            parts.append(ageMinutes == 1 ? "1 minute ago" : "\(ageMinutes) minutes ago")
+        }
+        var text = parts.joined(separator: ", ")
+        if isStale { text += ". This reading is old" }
+        if snapshot.iob != nil { text += ". Insulin on board \(iobText.dropLast()) units" }
+        if let cob = snapshot.cob { text += ". Carbs on board \(cob) grams" }
+        switch loopStatus {
+        case .fresh: break
+        case .aging, .stale: text += ". Loop last ran \(loopAgeMinutes.map { "\($0) minutes ago" } ?? "a while ago")"
+        }
+        return text + "."
+    }
 
     // MARK: Insulin and carbs
 
