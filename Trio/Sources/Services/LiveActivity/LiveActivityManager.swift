@@ -114,6 +114,8 @@ final class LiveActivityData: ObservableObject {
         notificationCenter
             .addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
                 Task { @MainActor in
+                    // Custom addition: let the Home Screen widget catch up while refreshes are free.
+                    TrioHomeWidgetBridge.reloadNow()
                     await self?.pushCurrentContent()
                 }
             }
@@ -480,6 +482,28 @@ final class LiveActivityData: ObservableObject {
 
     private static var lastPublished: Snapshot?
     private static var pendingReload: Task<Void, Never>?
+    private static var lastReload: Date?
+
+    /// iOS allows a widget roughly 40 to 70 refreshes a day while Trio is in the background,
+    /// and ignores requests once they are used up. So in the background the widget is
+    /// refreshed at most this often while glucose is in range and steady...
+    private static let calmReloadInterval: TimeInterval = 20 * 60
+    /// ...and with every reading (about every five minutes) when it is low, high or moving fast.
+    private static let urgentReloadInterval: TimeInterval = 4 * 60
+    /// A change of this many mg/dL from the previous reading counts as moving fast.
+    private static let fastChange = 10
+    /// The loop result usually lands within half a minute of a new reading. Waiting for it
+    /// means one refresh shows both, instead of spending two.
+    private static let settleDelay: UInt64 = 30_000_000_000
+
+    /// Refreshes the widget right away. Free while Trio is open, so call it when Trio
+    /// comes to the front: the widget then catches up on anything it missed.
+    static func reloadNow() {
+        pendingReload?.cancel()
+        pendingReload = nil
+        lastReload = Date()
+        WidgetCenter.shared.reloadTimelines(ofKind: kind)
+    }
 
     /// - Parameter glucose: recent readings, newest first.
     static func publish(
@@ -548,20 +572,32 @@ final class LiveActivityData: ObservableObject {
         defaults.set(encoded, forKey: storageKey)
         lastPublished = snapshot
 
-        pendingReload?.cancel()
-        pendingReload = nil
-
-        if isNewReading {
-            // A new glucose value goes out straight away.
-            WidgetCenter.shared.reloadTimelines(ofKind: kind)
-        } else {
-            // IOB, COB and loop time tend to arrive in a burst a few seconds after the
-            // reading. Wait briefly so the burst costs one refresh instead of several.
-            pendingReload = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                guard !Task.isCancelled else { return }
-                WidgetCenter.shared.reloadTimelines(ofKind: kind)
-            }
+        // While Trio is open, refreshes are free: show every change straight away.
+        if UIApplication.shared.applicationState == .active {
+            reloadNow()
+            return
         }
+
+        // In the background only a new reading can trigger a refresh. Changes to IOB, COB
+        // or the loop on their own wait for the next reading.
+        guard isNewReading, pendingReload == nil else { return }
+        pendingReload = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: settleDelay)
+            guard !Task.isCancelled else { return }
+            pendingReload = nil
+            guard let current = lastPublished else { return }
+
+            let interval = needsAttention(current) ? urgentReloadInterval : calmReloadInterval
+            if let lastReload, Date().timeIntervalSince(lastReload) < interval { return }
+            reloadNow()
+        }
+    }
+
+    /// Low, high or changing fast: worth spending a refresh on every reading.
+    private static func needsAttention(_ snapshot: Snapshot) -> Bool {
+        let glucose = Double(snapshot.glucose)
+        if glucose < snapshot.low || glucose > snapshot.high { return true }
+        if let previous = snapshot.previousGlucose, abs(snapshot.glucose - previous) >= fastChange { return true }
+        return false
     }
 }

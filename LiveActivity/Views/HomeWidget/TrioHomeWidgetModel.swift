@@ -89,9 +89,12 @@ struct TrioHomeWidgetModel {
     let now: Date
 
     /// A reading older than this is drawn greyed out and struck through.
-    static let staleAfter: TimeInterval = 12 * 60
+    /// iOS only lets the app refresh the widget about every 20 minutes in the background
+    /// (see TrioHomeWidgetBridge), so a reading up to about 25 minutes old is normal here.
+    /// Anything older means Trio really has stopped getting readings.
+    static let staleAfter: TimeInterval = 27 * 60
     /// Past this age (in minutes) the label switches from "x min ago" to a self-updating duration.
-    static let minuteLabelLimit = 20
+    static let minuteLabelLimit = 30
     /// How much history the chart shows.
     static let chartWindow: TimeInterval = 3 * 60 * 60
 
@@ -99,8 +102,8 @@ struct TrioHomeWidgetModel {
 
     /// How far ahead the forecast is drawn.
     static let forecastHorizon: TimeInterval = 2 * 60 * 60
-    /// A forecast from a loop older than this is not drawn at all.
-    static let forecastMaxAge: TimeInterval = 15 * 60
+    /// A forecast from a loop older than this is not drawn at all, and the loop shows red.
+    static let forecastMaxAge: TimeInterval = 30 * 60
     /// Forecast values above this are clipped, like in Trio's own charts.
     static let forecastCeiling = 300
 
@@ -139,8 +142,8 @@ struct TrioHomeWidgetModel {
     /// Like Trio's loop circle: fresh (green), aging (amber) or stale (red).
     enum LoopStatus { case fresh, aging, stale }
 
-    /// A loop result older than this is shown as aging.
-    static let loopAgingAfter: TimeInterval = 6 * 60
+    /// A loop result older than this is shown as aging (longer than the normal gap between widget refreshes).
+    static let loopAgingAfter: TimeInterval = 26 * 60
 
     var loopAgeMinutes: Int? {
         guard let loopDate = snapshot.loopDate else { return nil }
