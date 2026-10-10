@@ -4,6 +4,7 @@ import CoreData
 import Foundation
 import Swinject
 import UIKit
+import WidgetKit
 
 @available(iOS 16.2, *) private struct ActiveActivity {
     let activity: Activity<LiveActivityAttributes>
@@ -407,6 +408,14 @@ final class LiveActivityData: ObservableObject {
         }
         let prevGlucose = data.glucoseFromPersistence?.dropFirst().first
 
+        // Custom addition: keep the Home Screen widget up to date (display only).
+        TrioHomeWidgetBridge.publish(
+            glucose: glucose,
+            determination: data.determination,
+            iob: data.iob,
+            settings: settings
+        )
+
         guard let determination = data.determination else {
             debug(.default, "[LiveActivityManager] pushCurrentContent: no determination available")
             return
@@ -426,5 +435,133 @@ final class LiveActivityData: ObservableObject {
         )
 
         await pushUpdate(content)
+    }
+}
+
+// MARK: - Home Screen widget bridge (custom addition, not part of upstream Trio)
+
+/// Copies what Trio already shows (glucose, trend, IOB, COB) into the shared app group
+/// so the Home Screen widget can display it. Display only: nothing here reads from or
+/// writes to the pump, the CGM or the dosing algorithm.
+@MainActor enum TrioHomeWidgetBridge {
+    /// Keep the fields in sync with `TrioHomeWidgetSnapshot` in the LiveActivity extension.
+    struct Snapshot: Codable, Equatable {
+        var glucose: Int
+        var glucoseDate: Date
+        var previousGlucose: Int?
+        var direction: String?
+        var units: String
+        var low: Double
+        var high: Double
+        var target: Double?
+        var colorScheme: String
+        var iob: Double?
+        var cob: Int?
+        var loopDate: Date?
+        var historyDates: [Double]
+        var historyValues: [Int]
+        var forecastStyle: String?
+        var forecastMin: [Int]?
+        var forecastMax: [Int]?
+        var forecastLines: [ForecastLine]?
+    }
+
+    struct ForecastLine: Codable, Equatable {
+        var type: String
+        var values: [Int]
+    }
+
+    private static let kind = "TrioHomeWidget"
+    private static let storageKey = "trioHomeWidget.snapshot.v1"
+    private static let historyWindow: TimeInterval = 3 * 60 * 60
+    private static let maxHistoryPoints = 48
+    /// Two hours of forecast at one value every five minutes, plus the starting point.
+    private static let maxForecastPoints = 25
+
+    private static var lastPublished: Snapshot?
+    private static var pendingReload: Task<Void, Never>?
+
+    /// - Parameter glucose: recent readings, newest first.
+    static func publish(
+        glucose: [GlucoseData],
+        determination: DeterminationData?,
+        iob: Decimal?,
+        settings: TrioSettings
+    ) {
+        guard let latest = glucose.first,
+              let groupID = Bundle.main.object(forInfoDictionaryKey: "AppGroupID") as? String,
+              let defaults = UserDefaults(suiteName: groupID)
+        else { return }
+
+        // Only offer a delta when the previous reading is close enough in time to mean something.
+        var previousGlucose: Int?
+        if let previous = glucose.dropFirst().first,
+           latest.date.timeIntervalSince(previous.date) <= 15 * 60
+        {
+            previousGlucose = previous.glucose
+        }
+
+        // Last three hours for the chart, thinned to roughly one point every five minutes
+        // so sensors that report every minute do not bloat the snapshot.
+        let cutoff = latest.date.addingTimeInterval(-historyWindow)
+        var historyDates: [Double] = []
+        var historyValues: [Int] = []
+        var lastKept: Date?
+        for reading in glucose {
+            if reading.date < cutoff || historyDates.count >= maxHistoryPoints { break }
+            if let lastKept, lastKept.timeIntervalSince(reading.date) < 4 * 60 { continue }
+            historyDates.append(reading.date.timeIntervalSince1970)
+            historyValues.append(reading.glucose)
+            lastKept = reading.date
+        }
+
+        let snapshot = Snapshot(
+            glucose: latest.glucose,
+            glucoseDate: latest.date,
+            previousGlucose: previousGlucose,
+            direction: latest.direction?.symbol,
+            units: settings.units.rawValue,
+            low: NSDecimalNumber(decimal: settings.low).doubleValue,
+            high: NSDecimalNumber(decimal: settings.high).doubleValue,
+            // Trio reports 0 when there is no current target; let the widget use its default instead.
+            target: determination.flatMap { $0.target > 0 ? NSDecimalNumber(decimal: $0.target).doubleValue : nil },
+            colorScheme: settings.glucoseColorScheme.rawValue,
+            iob: iob.map { (NSDecimalNumber(decimal: $0).doubleValue * 100).rounded() / 100 },
+            cob: determination?.cob,
+            loopDate: determination?.date,
+            historyDates: historyDates,
+            historyValues: historyValues,
+            forecastStyle: determination == nil ? nil : settings.forecastDisplayType.rawValue,
+            forecastMin: determination.map { Array($0.minForecast.prefix(maxForecastPoints)) },
+            forecastMax: determination.map { Array($0.maxForecast.prefix(maxForecastPoints)) },
+            forecastLines: determination.map {
+                $0.forecastLines.map { ForecastLine(type: $0.type, values: Array($0.values.prefix(maxForecastPoints))) }
+            }
+        )
+
+        // Nothing new to show: do not spend one of the widget refreshes iOS allows per day.
+        guard snapshot != lastPublished else { return }
+        guard let encoded = try? JSONEncoder().encode(snapshot) else { return }
+
+        let isNewReading = lastPublished?.glucoseDate != snapshot.glucoseDate
+            || lastPublished?.glucose != snapshot.glucose
+        defaults.set(encoded, forKey: storageKey)
+        lastPublished = snapshot
+
+        pendingReload?.cancel()
+        pendingReload = nil
+
+        if isNewReading {
+            // A new glucose value goes out straight away.
+            WidgetCenter.shared.reloadTimelines(ofKind: kind)
+        } else {
+            // IOB, COB and loop time tend to arrive in a burst a few seconds after the
+            // reading. Wait briefly so the burst costs one refresh instead of several.
+            pendingReload = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                WidgetCenter.shared.reloadTimelines(ofKind: kind)
+            }
+        }
     }
 }
