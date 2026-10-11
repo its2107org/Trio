@@ -88,13 +88,14 @@ struct TrioHomeWidgetModel {
     /// The moment this widget entry is shown (not when it was built).
     let now: Date
 
-    /// A reading older than this is drawn greyed out and struck through.
-    /// iOS only lets the app refresh the widget about every 20 minutes in the background
-    /// (see TrioHomeWidgetBridge), so a reading up to about 25 minutes old is normal here.
-    /// Anything older means Trio really has stopped getting readings.
-    static let staleAfter: TimeInterval = 27 * 60
-    /// Past this age (in minutes) the label switches from "x min ago" to a self-updating duration.
-    static let minuteLabelLimit = 30
+    /// How old a reading may get before the big number is greyed and crossed out. It depends on
+    /// the trend, because a number that is moving fast goes out of date sooner (Ian's rule):
+    /// straight up or down after 5 minutes, slanted after 10, flat after 20.
+    static let crossOutFast: TimeInterval = 5 * 60
+    static let crossOutSlanted: TimeInterval = 10 * 60
+    static let crossOutFlat: TimeInterval = 20 * 60
+    /// The widget redraws once a minute up to this age (in minutes) so the labels stay right.
+    static let minuteLabelLimit = 60
     /// How much history the chart shows.
     static let chartWindow: TimeInterval = 3 * 60 * 60
 
@@ -132,7 +133,15 @@ struct TrioHomeWidgetModel {
 
     var age: TimeInterval { max(0, now.timeIntervalSince(snapshot.glucoseDate)) }
     var ageMinutes: Int { Int(age / 60) }
-    var isStale: Bool { age >= Self.staleAfter }
+    var isStale: Bool { age > crossOutAfter }
+
+    var crossOutAfter: TimeInterval {
+        // Trio's arrows: ↑ ↑↑ ↑↑↑ ↓ ↓↓ ↓↓↓ (fast), ↗︎ ↘︎ (slanted), → and ↔︎ (flat or unknown).
+        let scalars = (direction ?? "").unicodeScalars.map(\.value)
+        if scalars.contains(0x2191) || scalars.contains(0x2193) { return Self.crossOutFast }
+        if scalars.contains(0x2197) || scalars.contains(0x2198) { return Self.crossOutSlanted }
+        return Self.crossOutFlat
+    }
     /// True once "x min ago" would no longer be trustworthy as a fixed label.
     var usesRunningAge: Bool { ageMinutes >= Self.minuteLabelLimit }
 
@@ -142,8 +151,10 @@ struct TrioHomeWidgetModel {
     /// Like Trio's loop circle: fresh (green), aging (amber) or stale (red).
     enum LoopStatus { case fresh, aging, stale }
 
-    /// A loop result older than this is shown as aging (longer than the normal gap between widget refreshes).
-    static let loopAgingAfter: TimeInterval = 26 * 60
+    /// The Loop pill turns amber after this...
+    static let loopAgingAfter: TimeInterval = 5 * 60
+    /// ...and red after this.
+    static let loopStaleAfter: TimeInterval = 15 * 60
 
     var loopAgeMinutes: Int? {
         guard let loopDate = snapshot.loopDate else { return nil }
@@ -153,7 +164,7 @@ struct TrioHomeWidgetModel {
     var loopStatus: LoopStatus {
         guard let loopDate = snapshot.loopDate else { return .stale }
         let loopAge = now.timeIntervalSince(loopDate)
-        if loopAge > Self.forecastMaxAge { return .stale }
+        if loopAge > Self.loopStaleAfter { return .stale }
         if loopAge > Self.loopAgingAfter { return .aging }
         return .fresh
     }
@@ -162,6 +173,20 @@ struct TrioHomeWidgetModel {
     var loopText: String {
         guard let minutes = loopAgeMinutes else { return "no loop" }
         return minutes < 1 ? "loop now" : "loop \(minutes)m"
+    }
+
+    /// "Loop 9m", "Loop now", "Loop 1h+" or "No loop", for the pill.
+    var loopPillText: String {
+        guard let minutes = loopAgeMinutes else { return "No loop" }
+        if minutes < 1 { return "Loop now" }
+        return minutes >= 60 ? "Loop 1h+" : "Loop \(minutes)m"
+    }
+
+    /// "L 9m", for the round Lock Screen size.
+    var loopShortText: String {
+        guard let minutes = loopAgeMinutes else { return "No loop" }
+        if minutes < 1 { return "L now" }
+        return minutes >= 60 ? "L 1h+" : "L \(minutes)m"
     }
 
     var ageText: String {
@@ -221,7 +246,7 @@ struct TrioHomeWidgetModel {
         }
         var text = parts.joined(separator: ", ")
         if isStale { text += ". This reading is old" }
-        if snapshot.iob != nil { text += ". Insulin on board \(iobText.dropLast()) units" }
+        if snapshot.iob != nil { text += ". Insulin on board \(iobText.dropLast(2)) units" }
         if let cob = snapshot.cob { text += ". Carbs on board \(cob) grams" }
         switch loopStatus {
         case .fresh: break
@@ -238,12 +263,12 @@ struct TrioHomeWidgetModel {
         formatter.numberStyle = .decimal
         formatter.minimumFractionDigits = 1
         formatter.maximumFractionDigits = 2
-        return (formatter.string(from: NSNumber(value: iob)) ?? "--") + "U"
+        return (formatter.string(from: NSNumber(value: iob)) ?? "--") + " U"
     }
 
     var cobText: String {
         guard let cob = snapshot.cob else { return "--" }
-        return "\(cob)g"
+        return "\(cob) g"
     }
 
     // MARK: Colour

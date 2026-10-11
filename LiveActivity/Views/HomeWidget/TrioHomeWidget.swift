@@ -132,35 +132,18 @@ struct TrioHomeWidgetView: View {
     }
 }
 
-/// Deep, dark backdrop. When the Home Screen is set to Clear or Tinted, iOS removes
-/// this and supplies its own glass, so the widget content sits directly on it.
+/// Dark backdrop close to Apple's own dark widgets. When the Home Screen is set to Clear or
+/// Tinted, iOS removes this and supplies its own glass, so the content sits directly on it.
 struct TrioHomeWidgetBackground: View {
     var body: some View {
         LinearGradient(
             colors: [
-                Color(red: 0.10, green: 0.11, blue: 0.16),
-                Color(red: 0.03, green: 0.03, blue: 0.06)
+                Color(red: 0.165, green: 0.165, blue: 0.180),
+                Color(red: 0.086, green: 0.086, blue: 0.094)
             ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
+            startPoint: .top,
+            endPoint: .bottom
         )
-    }
-}
-
-/// A frosted, glass-like panel: a faint light fill with a thin bright edge.
-struct TrioHomeWidgetGlass: ViewModifier {
-    var cornerRadius: CGFloat = 11
-
-    func body(content: Content) -> some View {
-        content
-            .background {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color.white.opacity(0.09))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.6)
-            }
     }
 }
 
@@ -172,11 +155,11 @@ struct TrioHomeWidgetEmptyView: View {
         if family == .systemSmall || family == .systemMedium || family == .systemLarge {
             VStack(spacing: 4) {
                 Text("--")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.white)
                 Text("Open Trio")
-                    .font(.caption)
-                    .foregroundStyle(Color.white.opacity(0.6))
+                    .font(.footnote)
+                    .foregroundStyle(TrioHomeWidgetPalette.secondary)
             }
         } else {
             Text("--")
@@ -184,244 +167,237 @@ struct TrioHomeWidgetEmptyView: View {
     }
 }
 
-/// The big number with its trend arrow. Greyed out and struck through once the reading is old.
-struct TrioHomeWidgetGlucoseView: View {
+/// The full-width "Loop 9m" pill across the top. Green dot while the loop is current, amber after
+/// 5 minutes, red after 15. The whole pill is a button: tapping it refreshes the widget.
+struct TrioHomeWidgetLoopPill: View {
     let model: TrioHomeWidgetModel
-    var size: CGFloat = 44
+    var showsReadingAge = false
+    var fontSize: CGFloat = 13
+    var height: CGFloat = 28
+
+    var body: some View {
+        Button(intent: TrioHomeWidgetRefreshIntent()) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 7, height: 7)
+                Text(model.loopPillText)
+                if showsReadingAge {
+                    Text("· reading \(model.ageText)")
+                        .fontWeight(.medium)
+                        .foregroundStyle(metaColor)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: fontSize, weight: .semibold))
+                    .foregroundStyle(metaColor)
+            }
+            .font(.system(size: fontSize, weight: .semibold, design: .rounded))
+            .foregroundStyle(textColor)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .padding(.leading, 11)
+            .padding(.trailing, 10)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .background(Capsule().fill(fillColor))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        // Apple's guidelines inset grouping shapes 11 pt from the edge, 5 pt less than the content margin.
+        .padding(.horizontal, -5)
+        .padding(.top, -5)
+    }
+
+    private var dotColor: Color {
+        switch model.loopStatus {
+        case .fresh: return TrioHomeWidgetPalette.systemGreen
+        case .aging: return TrioHomeWidgetPalette.systemOrange
+        case .stale: return TrioHomeWidgetPalette.systemRed
+        }
+    }
+
+    private var textColor: Color {
+        switch model.loopStatus {
+        case .fresh: return Color.white
+        case .aging: return TrioHomeWidgetPalette.systemOrange
+        case .stale: return TrioHomeWidgetPalette.softRed
+        }
+    }
+
+    private var metaColor: Color {
+        model.loopStatus == .fresh ? TrioHomeWidgetPalette.secondary : textColor.opacity(0.85)
+    }
+
+    private var fillColor: Color {
+        switch model.loopStatus {
+        case .fresh: return TrioHomeWidgetPalette.pillFill
+        case .aging: return TrioHomeWidgetPalette.systemOrange.opacity(0.2)
+        case .stale: return TrioHomeWidgetPalette.systemRed.opacity(0.22)
+        }
+    }
+}
+
+/// The big number with its trend arrow. Greyed out and crossed out once it is too old
+/// to trust for its trend (see `TrioHomeWidgetModel.crossOutAfter`).
+struct TrioHomeWidgetNumberView: View {
+    let model: TrioHomeWidgetModel
+    var size: CGFloat
 
     var body: some View {
         let color = model.isStale
-            ? Color.white.opacity(0.45)
+            ? TrioHomeWidgetPalette.tertiary
             : TrioHomeWidgetPalette.color(hue: model.hue(mgdl: Double(model.snapshot.glucose)))
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: size * 0.06) {
             Text(model.glucoseText)
-                .font(.system(size: size, weight: .bold, design: .rounded))
-                .strikethrough(model.isStale, pattern: .solid, color: .red.opacity(0.8))
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
+                .font(.system(size: size, weight: .semibold, design: .rounded))
+                .tracking(-size * 0.03)
+                .strikethrough(model.isStale, pattern: .solid, color: TrioHomeWidgetPalette.systemRed)
             if let direction = model.direction {
                 Text(direction)
-                    .font(.system(size: size * 0.45, weight: .bold, design: .rounded))
-                    .lineLimit(1)
+                    .font(.system(size: size * 0.5, weight: .semibold, design: .rounded))
             }
         }
         .foregroundStyle(color)
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
         .widgetAccentable()
     }
 }
 
-/// "+3 mg/dL"
+/// "+6 mg/dL". "–" when there is no recent previous reading to compare with.
 struct TrioHomeWidgetDeltaView: View {
     let model: TrioHomeWidgetModel
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 3) {
-            // "–" when there is no recent previous reading to compare with (for example after a sensor change).
+        (
             Text(model.deltaText ?? "–")
-                .fontWeight(.semibold)
-                .foregroundStyle(Color.white.opacity(0.9))
-            Text(model.snapshot.units)
-                .foregroundStyle(Color.white.opacity(0.55))
-        }
-        .font(.caption)
-        .lineLimit(1)
-    }
-}
-
-/// How old the reading is. Turns red once the reading counts as old.
-struct TrioHomeWidgetAgeView: View {
-    let model: TrioHomeWidgetModel
-
-    var body: some View {
-        Group {
-            if model.usesRunningAge {
-                // Counts up by itself, so it stays true even if iOS never reloads the widget.
-                Text(model.snapshot.glucoseDate, style: .relative)
-            } else {
-                Text(model.ageText)
-            }
-        }
-        .font(.caption2)
-        .fontWeight(model.isStale ? .semibold : .regular)
-        .foregroundStyle(model.isStale ? TrioHomeWidgetPalette.warning : Color.white.opacity(0.55))
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
-    }
-}
-
-/// A coloured dot and "loop 2m", like Trio's loop circle: green when the loop ran recently,
-/// amber after 26 minutes, red after 30 minutes or when there is no loop result.
-struct TrioHomeWidgetLoopView: View {
-    let model: TrioHomeWidgetModel
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Circle()
-                .fill(TrioHomeWidgetPalette.loop(model.loopStatus))
-                .frame(width: 6, height: 6)
-            Text(model.loopText)
-        }
-        .font(.caption2)
-        .foregroundStyle(
-            model.loopStatus == .fresh ? Color.white.opacity(0.55) : TrioHomeWidgetPalette.loop(model.loopStatus)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white)
+                + Text(" \(model.snapshot.units)")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(TrioHomeWidgetPalette.secondary)
         )
         .lineLimit(1)
-        .minimumScaleFactor(0.7)
     }
 }
 
-/// A small round refresh button for the top right corner. Tapping it redraws the widget
-/// with the latest reading without opening Trio.
-struct TrioHomeWidgetRefreshButton: View {
-    var body: some View {
-        Button(intent: TrioHomeWidgetRefreshIntent()) {
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.75))
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.white.opacity(0.10)))
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.20), lineWidth: 0.6))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Text("Refresh"))
-    }
-}
-
-/// Reading age on the left, loop status on the right.
-struct TrioHomeWidgetFooterView: View {
-    let model: TrioHomeWidgetModel
-
-    var body: some View {
-        HStack(spacing: 4) {
-            TrioHomeWidgetAgeView(model: model)
-            Spacer(minLength: 2)
-            TrioHomeWidgetLoopView(model: model)
-        }
-    }
-}
-
-/// A glass chip such as "IOB 1.2U".
-struct TrioHomeWidgetStatView: View {
+/// "IOB 1.35 U" on one line: label in grey, value in white.
+struct TrioHomeWidgetInlineStat: View {
     let title: String
     let value: String
-    let isStale: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 3) {
-            Text(title)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.55))
-            Text(value)
+        (
+            Text("\(title) ")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(TrioHomeWidgetPalette.secondary)
+                + Text(value)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(isStale ? 0.5 : 0.95))
-        }
+                .foregroundStyle(Color.white)
+        )
         .lineLimit(1)
-        .minimumScaleFactor(0.7)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity)
-        .modifier(TrioHomeWidgetGlass(cornerRadius: 9))
     }
 }
 
+/// Label above value, for the large size.
+struct TrioHomeWidgetStackedStat: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.3)
+                .foregroundStyle(TrioHomeWidgetPalette.secondary)
+            Text(value)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white)
+        }
+        .lineLimit(1)
+    }
+}
+
+/// Pill on top, the number centred, IOB and COB along the bottom.
 struct TrioHomeWidgetSmallView: View {
     let model: TrioHomeWidgetModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .top, spacing: 2) {
-                TrioHomeWidgetGlucoseView(model: model, size: 44)
-                Spacer(minLength: 0)
-                TrioHomeWidgetRefreshButton()
-            }
-            TrioHomeWidgetDeltaView(model: model)
+        VStack(spacing: 0) {
+            TrioHomeWidgetLoopPill(model: model)
             Spacer(minLength: 0)
-            HStack(spacing: 6) {
-                TrioHomeWidgetStatView(title: "IOB", value: model.iobText, isStale: model.isStale || model.isLoopStale)
-                TrioHomeWidgetStatView(title: "COB", value: model.cobText, isStale: model.isStale || model.isLoopStale)
+            VStack(spacing: 4) {
+                TrioHomeWidgetNumberView(model: model, size: 58)
+                TrioHomeWidgetDeltaView(model: model)
             }
-            TrioHomeWidgetFooterView(model: model)
-                .padding(.top, 2)
+            Spacer(minLength: 0)
+            HStack(spacing: 10) {
+                TrioHomeWidgetInlineStat(title: "IOB", value: model.iobText)
+                TrioHomeWidgetInlineStat(title: "COB", value: model.cobText)
+            }
+            .minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-/// Top row: the number, change, age and loop status, with IOB and COB on the right.
-/// Below: the chart across the whole width of the widget.
+/// Pill on top. Below: the number, change, IOB and COB on the left, the chart on the right.
 struct TrioHomeWidgetMediumView: View {
     let model: TrioHomeWidgetModel
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(alignment: .center, spacing: 8) {
-                TrioHomeWidgetGlucoseView(model: model, size: 32)
-                    .fixedSize()
-                VStack(alignment: .leading, spacing: 1) {
+        VStack(spacing: 10) {
+            TrioHomeWidgetLoopPill(model: model, showsReadingAge: true)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 0) {
+                    TrioHomeWidgetNumberView(model: model, size: 42)
                     TrioHomeWidgetDeltaView(model: model)
-                    HStack(spacing: 6) {
-                        TrioHomeWidgetAgeView(model: model)
-                        TrioHomeWidgetLoopView(model: model)
-                    }
+                        .padding(.top, 4)
+                    Spacer(minLength: 2)
+                    TrioHomeWidgetInlineStat(title: "IOB", value: model.iobText)
+                    TrioHomeWidgetInlineStat(title: "COB", value: model.cobText)
                 }
-                Spacer(minLength: 4)
-                HStack(spacing: 4) {
-                    TrioHomeWidgetStatView(title: "IOB", value: model.iobText, isStale: model.isStale || model.isLoopStale)
-                    TrioHomeWidgetStatView(title: "COB", value: model.cobText, isStale: model.isStale || model.isLoopStale)
-                }
-                .frame(width: 112)
-                TrioHomeWidgetRefreshButton()
-            }
+                .frame(width: 112, alignment: .leading)
 
-            TrioHomeWidgetChartView(model: model)
-                .padding(.leading, 8)
-                .padding(.vertical, 6)
-                .padding(.trailing, 4)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .modifier(TrioHomeWidgetGlass(cornerRadius: 14))
+                TrioHomeWidgetChartView(model: model, showsHours: false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 }
 
-/// Full width and tall: a big number on top, a large chart in the middle, IOB and COB along the bottom.
+/// Pill on top, a big number with IOB and COB beside it, and a large chart below.
 struct TrioHomeWidgetLargeView: View {
     let model: TrioHomeWidgetModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    TrioHomeWidgetGlucoseView(model: model, size: 56)
+        VStack(spacing: 0) {
+            TrioHomeWidgetLoopPill(model: model, showsReadingAge: true, fontSize: 14, height: 30)
+            HStack(alignment: .bottom, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    TrioHomeWidgetNumberView(model: model, size: 64)
                     TrioHomeWidgetDeltaView(model: model)
                 }
                 Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 4) {
-                    TrioHomeWidgetRefreshButton()
-                    TrioHomeWidgetAgeView(model: model)
-                    TrioHomeWidgetLoopView(model: model)
+                HStack(alignment: .top, spacing: 20) {
+                    TrioHomeWidgetStackedStat(title: "IOB", value: model.iobText)
+                    TrioHomeWidgetStackedStat(title: "COB", value: model.cobText)
                 }
             }
-
-            TrioHomeWidgetChartView(model: model)
-                .padding(.leading, 8)
-                .padding(.vertical, 8)
-                .padding(.trailing, 4)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .modifier(TrioHomeWidgetGlass(cornerRadius: 16))
-
-            HStack(spacing: 8) {
-                TrioHomeWidgetStatView(title: "IOB", value: model.iobText, isStale: model.isStale || model.isLoopStale)
-                TrioHomeWidgetStatView(title: "COB", value: model.cobText, isStale: model.isStale || model.isLoopStale)
-            }
+            .padding(.top, 14)
+            Spacer(minLength: 12)
+            TrioHomeWidgetChartView(model: model, showsHours: true)
+                .frame(maxWidth: .infinity)
+                .frame(height: 196)
         }
     }
 }
 
-/// The last three hours as dots plus, when the loop is current, Trio's forecast for
-/// the next two hours (a shaded cone or separate lines, following the setting in Trio).
 struct TrioHomeWidgetChartView: View {
     let model: TrioHomeWidgetModel
+    /// Clock times along the bottom. Off on the wide size, where they would be too small to read.
+    var showsHours = true
 
     var body: some View {
         let points = model.chartPoints
@@ -494,35 +470,32 @@ struct TrioHomeWidgetChartView: View {
                     .foregroundStyle(Color.white.opacity(0.6))
             }
         }
+        .chartXAxis(showsHours ? .visible : .hidden)
         .opacity(model.isStale ? 0.5 : 1)
     }
 }
 
 // MARK: - Lock Screen sizes
+// iOS draws these in a single tint, so the Loop label goes from outlined to filled
+// (instead of changing colour) once the loop is more than 5 minutes old.
 
 struct TrioHomeWidgetCircularView: View {
     let model: TrioHomeWidgetModel
 
     var body: some View {
-        VStack(spacing: 0) {
+        let filled = model.loopStatus != .fresh
+        VStack(spacing: 1) {
             Text(model.glucoseText)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(.system(size: 21, weight: .bold, design: .rounded))
                 .strikethrough(model.isStale, pattern: .solid, color: .primary)
+                .opacity(model.isStale ? 0.6 : 1)
                 .minimumScaleFactor(0.6)
                 .widgetAccentable()
-            // Fresh: trend arrow. Old: how old, so an old number is never mistaken for a current one.
-            if model.isStale {
-                if model.usesRunningAge {
-                    Text("old")
-                        .font(.caption2)
-                } else {
-                    Text(model.shortAgeText)
-                        .font(.caption2)
-                }
-            } else if let direction = model.direction {
-                Text(direction)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-            }
+            Text(model.loopShortText)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(filled ? Color.black : Color.primary)
+                .padding(.horizontal, 5)
+                .background(Capsule().fill(filled ? Color.white : Color.clear))
         }
         .lineLimit(1)
     }
@@ -532,53 +505,51 @@ struct TrioHomeWidgetRectangularView: View {
     let model: TrioHomeWidgetModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(model.glucoseText)
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .strikethrough(model.isStale, pattern: .solid, color: .primary)
-                    .widgetAccentable()
-                // Like the circular size: no trend arrow or delta on an old reading.
-                if !model.isStale {
-                    if let direction = model.direction {
+        let filled = model.loopStatus != .fresh
+        VStack(alignment: .leading, spacing: 3) {
+            Button(intent: TrioHomeWidgetRefreshIntent()) {
+                HStack(spacing: 5) {
+                    Text(model.loopPillText)
+                    Spacer(minLength: 2)
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(filled ? Color.black : Color.primary)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(filled ? Color.white : Color.clear))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(filled ? 0 : 0.85), lineWidth: 1))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Refresh. \(model.loopPillText)"))
+
+            HStack(alignment: .center, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text(model.glucoseText)
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .strikethrough(model.isStale, pattern: .solid, color: .primary)
+                        .opacity(model.isStale ? 0.6 : 1)
+                        .widgetAccentable()
+                    if !model.isStale, let direction = model.direction {
                         Text(direction)
-                            .fontWeight(.bold)
-                    }
-                    if let delta = model.deltaText {
-                        Text(delta)
-                            .font(.caption)
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
                     }
                 }
-            }
-            Text("IOB \(model.iobText)  COB \(model.cobText)")
-                .font(.caption)
-            HStack(spacing: 0) {
-                if model.usesRunningAge {
-                    Text(model.snapshot.glucoseDate, style: .relative)
-                } else {
-                    Text(model.isStale ? "OLD: \(model.ageText)" : model.ageText)
+                Text(model.isStale ? "old" : (model.deltaText ?? "–"))
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer(minLength: 2)
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text("IOB ") + Text(model.iobText).bold()
+                    Text("COB ") + Text(model.cobText).bold()
                 }
-                // Loop age only when it needs attention, to keep this line short.
-                if model.loopStatus != .fresh {
-                    Text(" · \(model.loopText)")
-                }
+                .font(.system(size: 11))
             }
-            .font(.caption2)
         }
         .lineLimit(1)
         .minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Refresh button in the top right corner, like the Home Screen sizes.
-        .overlay(alignment: .topTrailing) {
-            Button(intent: TrioHomeWidgetRefreshIntent()) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 24, height: 24, alignment: .topTrailing)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Refresh"))
-        }
     }
 }
 
@@ -590,16 +561,13 @@ struct TrioHomeWidgetInlineView: View {
     }
 
     private var text: String {
-        if model.usesRunningAge {
-            return "Trio: no recent reading"
-        }
         if model.isStale {
-            return "OLD \(model.glucoseText) (\(model.ageText))"
+            return "\(model.loopPillText) · old \(model.glucoseText)"
         }
         var parts = [model.glucoseText]
         if let direction = model.direction { parts.append(direction) }
         if let delta = model.deltaText { parts.append(delta) }
-        return parts.joined(separator: " ") + " · " + model.shortAgeText
+        return "\(model.loopPillText) · " + parts.joined(separator: " ")
     }
 }
 
@@ -613,6 +581,16 @@ enum TrioHomeWidgetPalette {
     }
 
     static let warning = Color(red: 1.0, green: 0.42, blue: 0.40)
+
+    /// Apple's dark-mode system colours, for the Loop pill.
+    static let systemGreen = Color(red: 0.188, green: 0.820, blue: 0.345)
+    static let systemOrange = Color(red: 1.0, green: 0.624, blue: 0.039)
+    static let systemRed = Color(red: 1.0, green: 0.271, blue: 0.227)
+    static let softRed = Color(red: 1.0, green: 0.412, blue: 0.380)
+    static let pillFill = Color(red: 0.47, green: 0.47, blue: 0.50).opacity(0.32)
+    /// Apple's secondary and tertiary label colours on a dark background.
+    static let secondary = Color(red: 0.92, green: 0.92, blue: 0.96).opacity(0.6)
+    static let tertiary = Color(red: 0.92, green: 0.92, blue: 0.96).opacity(0.3)
 
     /// Loop status colours, close to Trio's loop circle.
     static func loop(_ status: TrioHomeWidgetModel.LoopStatus) -> Color {
